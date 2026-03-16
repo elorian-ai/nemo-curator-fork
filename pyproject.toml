@@ -96,7 +96,7 @@ deduplication_cuda12 = [
 ]
 
 audio_cpu = [
-    "nemo_toolkit[asr]==2.4.0",
+    "nemo_toolkit[asr]>=2.6.1",
     "soundfile>=0.12.0",
 ]
 audio_cuda12 = [
@@ -235,7 +235,6 @@ constraint-dependencies = [
     "starlette>=0.49.1", # Address CVE GHSA-7f5h-v6xp-fcq8
     "urllib3>=2.6.3", # Address CVE GHSA-38jv-5279-wg99
     "wheel>=0.46.2", # Address CVE GHSA-8rrh-rw8j-w5fx
-    "xgrammar>=0.1.21", # Address CVE GHSA-5cmr-4px5-23pc
 ]
 override-dependencies = [
     "apex; sys_platform == 'never'",
@@ -243,10 +242,12 @@ override-dependencies = [
     "huggingface-hub>=0.34,<1.0", # Override huggingface-hub, transformers and data-designer require two different versions of hugging-face hub
     "kaldiio;  sys_platform == 'never'",
     "levenshtein;  sys_platform == 'never'",
+    "numba-cuda==0.15.1", # Override cudf's >=0.19.1 to match nemo-toolkit's pin. ASR transducer models (parakeet-tdt) crash with numba-cuda>0.15.1 (NeMo#15155). Curator's dedup uses libcudf C++ ops, not numba JIT, so 0.15.1 is safe. Remove once NeMo fixes numba-cuda compat.
     "numpy>=2.0.0,<=2.2.0", # Override nemo-toolkits constraint of <2.0.0, upperbounds for Numba compatibility
     "protobuf>=5.29.5",  # Override nemo-toolkits constraint of ~=5.29.5
     "setuptools>=80.10.1", # Override setuptools range in other dependencies to address CVE GHSA-58pv-8j8x-9vj2
     "transformers<=4.55.2", # Else Cosmos Embed imports fail
+    "xgrammar>=0.1.32", # Override vllm's ==0.1.29 pin to address CVE GHSA-7rgv-gqhr-fxg3 (DoS via multi-layer nesting)
 ]
 
 
