@@ -21,13 +21,13 @@ Standardized return type for all deduplication workflows:
 - **Structured metadata**: Access per-stage timing (`total_time`, `identification_time`, etc.), duplicate counts (`num_duplicates`, `num_duplicates_removed`), and output paths through `result.metadata`
 - **`TaskPerfUtils` compatibility**: `collect_stage_metrics()` and `aggregate_task_metrics()` now accept `WorkflowRunResult` directly
 
-<!-- TODO: Add remaining 26.04 "What's New" sections as PRs are finalized -->
+{/* TODO: Add remaining 26.04 "What's New" sections as PRs are finalized */}
 
 ## Breaking Changes
 
 - **Deduplication workflow return types changed**: `ExactDeduplicationWorkflow.run()` and `FuzzyDeduplicationWorkflow.run()` now return `WorkflowRunResult` instead of `None`. `SemanticDeduplicationWorkflow.run()` and `TextSemanticDeduplicationWorkflow.run()` return `WorkflowRunResult` instead of `dict`. `TextDuplicatesRemovalWorkflow.run()` returns `WorkflowRunResult` instead of `list[FileGroupTask] | None`. Code that previously ignored the return value is unaffected; code that consumed the old `dict` return from semantic workflows must migrate to `result.metadata` and `result.pipeline_tasks`.
 
-<!-- TODO: Add remaining 26.04 breaking changes, improvements, bug fixes, dependency updates -->
+{/* TODO: Add remaining 26.04 breaking changes, improvements, bug fixes, dependency updates */}
 
 ---
 
