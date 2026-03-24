@@ -18,13 +18,20 @@ from io import BytesIO
 from pathlib import Path
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from PIL import Image
 
+from nemo_curator.stages.file_partitioning import FilePartitioningStage
+from nemo_curator.stages.interleaved.io.reader import InterleavedParquetReader
+from nemo_curator.stages.interleaved.io.readers.parquet import InterleavedParquetReaderStage
 from nemo_curator.stages.interleaved.io.readers.webdataset import InterleavedWebdatasetReaderStage
+from nemo_curator.stages.interleaved.io.writers.tabular import InterleavedParquetWriterStage
 from nemo_curator.tasks import FileGroupTask, InterleavedBatch
+from nemo_curator.tasks.interleaved import INTERLEAVED_SCHEMA
 
-from .conftest import build_multi_frame_tiff, task_for_tar, write_tar
+from .conftest import build_multi_frame_tiff, make_interleaved_batch, task_for_tar, write_tar
 
 
 def _as_df(task_or_tasks: InterleavedBatch | list[InterleavedBatch]) -> pd.DataFrame:
@@ -827,3 +834,136 @@ def test_reader_unknown_fields_pass_through_by_default(tmp_path: Path) -> None:
     meta = df[df["modality"] == "metadata"].iloc[0]
     assert meta["pdf_name"] == "doc.pdf"
     assert meta["url"] == "https://example.com"
+
+
+# ---------------------------------------------------------------------------
+# InterleavedParquetReaderStage tests
+# ---------------------------------------------------------------------------
+
+
+def _write_parquet_task(batch: InterleavedBatch, out_dir: Path) -> str:
+    """Write *batch* to parquet and return the written file path."""
+    writer = InterleavedParquetWriterStage(path=str(out_dir), materialize_on_write=False, mode="overwrite")
+    write_task = writer.process(batch)
+    return write_task.data[0]
+
+
+def test_parquet_reader_roundtrip(tmp_path: Path) -> None:
+    """Write a batch with the parquet writer, read it back; data matches."""
+    batch = make_interleaved_batch(num_samples=2, include_images=False)
+    pq_path = _write_parquet_task(batch, tmp_path / "out")
+
+    task = FileGroupTask(task_id="pq_rt", dataset_name="d", data=[pq_path])
+    reader = InterleavedParquetReaderStage()
+    result = reader.process(task)
+    assert isinstance(result, InterleavedBatch)
+    df = result.to_pandas()
+
+    assert set(df["sample_id"].tolist()) == {"sample_0", "sample_1"}
+    text_rows = df[df["modality"] == "text"]
+    assert set(text_rows["text_content"].tolist()) == {"Hello 0", "Hello 1"}
+    assert result._metadata.get("source_files") == [pq_path]
+
+
+def test_parquet_reader_missing_columns_filled_with_null(tmp_path: Path) -> None:
+    """A parquet file with only 3 columns; all other schema cols become null."""
+    minimal = pa.Table.from_pylist(
+        [{"sample_id": "s1", "position": 0, "modality": "text"}],
+        schema=pa.schema(
+            [
+                pa.field("sample_id", pa.string()),
+                pa.field("position", pa.int32()),
+                pa.field("modality", pa.string()),
+            ]
+        ),
+    )
+    pq_path = tmp_path / "minimal.parquet"
+    pq.write_table(minimal, pq_path)
+
+    task = FileGroupTask(task_id="minimal", dataset_name="d", data=[str(pq_path)])
+    result = InterleavedParquetReaderStage().process(task)
+    assert isinstance(result, InterleavedBatch)
+    df = result.to_pandas()
+    assert len(df) == 1
+    assert pd.isna(df.loc[0, "text_content"])
+    assert pd.isna(df.loc[0, "binary_content"])
+
+
+def test_parquet_reader_fields_subset(tmp_path: Path) -> None:
+    """fields=(...) reads only reserved cols + requested extras; others absent."""
+    batch = make_interleaved_batch(num_samples=1, include_images=False)
+    pq_path = _write_parquet_task(batch, tmp_path / "out")
+
+    task = FileGroupTask(task_id="fields_sub", dataset_name="d", data=[pq_path])
+    result = InterleavedParquetReaderStage(fields=("text_content",)).process(task)
+    assert isinstance(result, InterleavedBatch)
+    df = result.to_pandas()
+    assert "text_content" in df.columns
+    assert "binary_content" in df.columns  # reserved — always present
+
+
+def test_parquet_reader_fields_null_fill_missing(tmp_path: Path) -> None:
+    """A field in fields= that is absent from disk is null-filled, not errored."""
+    batch = make_interleaved_batch(num_samples=1, include_images=False)
+    pq_path = _write_parquet_task(batch, tmp_path / "out")
+
+    task = FileGroupTask(task_id="null_fill", dataset_name="d", data=[pq_path])
+    result = InterleavedParquetReaderStage(fields=("nonexistent_field",)).process(task)
+    assert isinstance(result, InterleavedBatch)
+    df = result.to_pandas()
+    assert "nonexistent_field" in df.columns
+    assert df["nonexistent_field"].isna().all()
+
+
+def test_parquet_reader_max_batch_bytes_splits(tmp_path: Path) -> None:
+    """Two parquet files, one sample each; max_batch_bytes=1 → 2 splits,
+    each split's source_files lists only its contributing file."""
+    batch_a = make_interleaved_batch(num_samples=1, task_id="a", include_images=False)
+    batch_b = make_interleaved_batch(num_samples=1, task_id="b", include_images=False)
+    # Give distinct sample_ids
+    rows_a = batch_a.to_pandas().copy()
+    rows_a["sample_id"] = "doc_a"
+    rows_b = batch_b.to_pandas().copy()
+    rows_b["sample_id"] = "doc_b"
+
+    out_a = tmp_path / "a"
+    out_b = tmp_path / "b"
+    writer = InterleavedParquetWriterStage(path=str(out_a), materialize_on_write=False, mode="overwrite")
+    pq_a = writer.process(InterleavedBatch(task_id="a", dataset_name="d", data=rows_a)).data[0]
+    writer2 = InterleavedParquetWriterStage(path=str(out_b), materialize_on_write=False, mode="overwrite")
+    pq_b = writer2.process(InterleavedBatch(task_id="b", dataset_name="d", data=rows_b)).data[0]
+
+    task = FileGroupTask(task_id="split_test", dataset_name="d", data=[pq_a, pq_b])
+    result = InterleavedParquetReaderStage(max_batch_bytes=1).process(task)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    for batch in result:
+        sample_ids = set(batch.to_pandas()["sample_id"].tolist())
+        src = batch._metadata["source_files"]
+        assert len(src) == 1
+        if "doc_a" in sample_ids:
+            assert pq_a in src[0]
+        elif "doc_b" in sample_ids:
+            assert pq_b in src[0]
+
+
+def test_parquet_reader_empty_file(tmp_path: Path) -> None:
+    """An empty parquet file produces an empty InterleavedBatch with correct schema."""
+    empty = pa.Table.from_pylist([], schema=INTERLEAVED_SCHEMA)
+    pq_path = tmp_path / "empty.parquet"
+    pq.write_table(empty, pq_path)
+
+    task = FileGroupTask(task_id="empty", dataset_name="d", data=[str(pq_path)])
+    result = InterleavedParquetReaderStage().process(task)
+    assert isinstance(result, InterleavedBatch)
+    assert len(result.to_pandas()) == 0
+
+
+def test_parquet_reader_composite_decompose(tmp_path: Path) -> None:
+    """InterleavedParquetReader.decompose() returns [FilePartitioningStage, InterleavedParquetReaderStage]."""
+    reader = InterleavedParquetReader(file_paths=str(tmp_path))
+    stages = reader.decompose()
+    assert len(stages) == 2
+    assert isinstance(stages[0], FilePartitioningStage)
+    assert isinstance(stages[1], InterleavedParquetReaderStage)

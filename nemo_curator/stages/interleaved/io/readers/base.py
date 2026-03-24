@@ -63,3 +63,19 @@ class BaseInterleavedReader(ProcessingStage[FileGroupTask, InterleavedBatch]):
         if self.schema is not None:
             return align_table(table, self.schema)
         return table.cast(reconcile_schema(table.schema))
+
+    @staticmethod
+    def _source_files_for_split(
+        split: pa.Table,
+        idx: int,
+        sample_id_to_path: dict[str, str],
+        all_paths: list[str],
+    ) -> list[str]:
+        """Return source_files for one split, listing only the contributing paths."""
+        seen: set[str] = set()
+        for sid in split["sample_id"].unique().to_pylist():
+            path = sample_id_to_path.get(sid)
+            if path is not None:
+                seen.add(path)
+        contributing = [p for p in all_paths if p in seen] or all_paths
+        return [f"{p}::split_{idx:05d}" for p in contributing]
