@@ -1,14 +1,3 @@
-> [!CAUTION]
-> # 🛑 DEPRECATED
-> **This repository has been moved to the Elorian monorepo.**
-> 👉 **https://github.com/elorian-ai/elorian** (path: `third_party/nemo-curator/`)
->
-> Last migrated commit: `ecb77af23`
->
-> This repo is archived and no longer maintained. All future development happens in the monorepo.
-
----
-
 <div align="center">
 
   <a href="https://github.com/NVIDIA-NeMo/Curator/blob/main/LICENSE">![https://pypi.org/project/nemo-curator](https://img.shields.io/github/license/NVIDIA-NeMo/Curator)</a>
